@@ -33,6 +33,7 @@ enum header_type {
 
 typedef struct http_request_s http_request_t;
 typedef struct http_reqest_handler_def_s http_reqest_handler_def_t;
+typedef struct http_client_s http_client_t;
 typedef struct http_server_s http_server_t;
 
 typedef int (*http_request_handler_func) (http_request_t *req);
@@ -42,7 +43,7 @@ typedef int (*http_request_handler_func) (http_request_t *req);
 
 struct http_reqest_handler_def_s {
     pcre *pattern;
-    http_request_handler_func *handler; 
+    http_request_handler_func handler; 
     http_reqest_handler_def_t *next;
 };
 
@@ -57,18 +58,44 @@ struct http_server_s {
 };
 
 
-struct http_request_s {
+struct http_client_s {
     http_server_t *server;
     uv_tcp_t handle;
-    http_parser parser;
     uv_write_t write_req;
-    uint32_t request_num;
+    // HTTP Parser...
+    http_parser parser;
 
+    http_request_t *request;
+};
+
+struct http_request_s {
+    // HTTP Client - could servce multiple requests...
+    http_client_t *client;
+
+    // Current Requestion number
+    uint32_t request_num;
+    // Used during parsing to determine what header
+    // we are getting a value for
     uint8_t current_header;
 
+    // Handler function to call based on the url/handler_def->pattern
     http_request_handler_func handler;
+    // Args extracted using handler_def pattern
+    const char **pattern_args;
 
+    // Used for Range Requests
     uint32_t range_start;
     uint32_t range_end;
 };
 
+http_server_t * http_server_create(char *listen_addr, short port);
+int http_server_delete(http_server_t *server);
+int http_server_add_handler(http_server_t *server, const char *pattern, http_request_handler_func handler);
+int http_server_run(http_server_t *server);
+int http_server_stop(http_server_t *server);
+
+
+int http_request_write_response(http_request_t *req, int status, const char *extra_headers, const char *content_type, const char *content, const uint32_t content_length);
+int http_request_chunked_response_start(http_request_t *req, int status, const char *extra_headers);
+int http_request_chunked_response_write(http_request_t *req, const char *data, int length);
+int http_request_chunked_response_end(http_request_t *req);
