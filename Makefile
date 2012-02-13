@@ -1,7 +1,7 @@
 CC?=gcc
 AR?=ar
 
-CPPFLAGS += -I. -Ilibuv/include -I/opt/local/include -L/opt/local/lib -lm -lpthread -lpcre
+CPPFLAGS += -I. -Ilibuv/include -Ihttp-parser/ -I/opt/local/include -L/opt/local/lib -lm -lpthread -lpcre
 CPPFLAGS_DEBUG = $(CPPFLAGS) -DHTTP_PARSER_STRICT=1 -DHTTP_PARSER_DEBUG=1
 CPPFLAGS_DEBUG += $(CPPFLAGS_DEBUG_EXTRA)
 CPPFLAGS_FAST = $(CPPFLAGS) -DHTTP_PARSER_STRICT=0 -DHTTP_PARSER_DEBUG=0
