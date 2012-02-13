@@ -1,5 +1,8 @@
 tags
 *.o
+*.dSYM
 test
 test_g
 test_fast
+libuv_http.a
+test_server
