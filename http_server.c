@@ -19,13 +19,69 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+
+#include "http_server.h"
+
+#include <uv.h>
+#include <http_parser.h>
+#include <pcre.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-#include "libuv/include/uv.h"
-#include "http-parser/http_parser.h"
-#include "http_server.h"
+
+
+
+struct http_reqest_handler_def_s {
+    pcre *pattern;
+    http_request_handler_func handler; 
+    http_reqest_handler_def_t *next;
+};
+
+
+struct http_server_s {
+    uv_loop_t* uv_loop;
+    uv_tcp_t tcp;
+    http_parser_settings parser_settings;
+    uint32_t request_num;
+    
+    http_reqest_handler_def_t *handlers;
+};
+
+
+struct http_client_s {
+    http_server_t *server;
+    uv_tcp_t handle;
+    uv_write_t write_req;
+    // HTTP Parser...
+    http_parser parser;
+
+    http_request_t *request;
+};
+
+
+struct http_request_s {
+    // HTTP Client - could service multiple requests...
+    http_client_t *client;
+
+    // Current Requestion number
+    uint32_t request_num;
+    // Used during parsing to determine what header
+    // we are getting a value for
+    uint8_t current_header;
+
+    // Handler function to call based on the url/handler_def->pattern
+    http_request_handler_func handler;
+    // Args extracted using handler_def pattern
+    const char **pattern_args;
+
+    // Used for Range Requests
+    uint32_t range_start;
+    uint32_t range_end;
+};
+
+
 
 #define CHECK(r, loop, msg) \
     if (r) { \
@@ -54,7 +110,7 @@ static void _http_cb_write_req_done(uv_write_t* req, int status);
 static void _http_cb_on_read(uv_stream_t* tcp, ssize_t nread, uv_buf_t buf);
 static void _http_cb_on_connect(uv_stream_t* server_handle, int status);
 
-// Requst Functions
+// Request Functions
 static http_request_t *_http_request_init(http_client_t *client);
 static void _http_request_finish(http_request_t *req);
 static http_client_t *_http_client_init(uv_stream_t* server_handle);
@@ -325,6 +381,7 @@ static void _http_client_finish(http_client_t *req) {
 
 }
 
+
 /*****************************************************************************
  * HTTP Server API
  ****************************************************************************/
@@ -457,19 +514,15 @@ int http_request_write_response(http_request_t *req, int status, const char *ext
 int http_request_chunked_response_start(http_request_t *req, int status, const char *extra_headers)
 {
     return 0;
-
 }
 
 
 int http_request_chunked_response_write(http_request_t *req, const char *data, int length) {
-
     return 0;
 }
 
 
 int http_request_chunked_response_end(http_request_t *req) {
-
-
     return 0;
 }
 
