@@ -53,13 +53,20 @@ struct http_server_s {
 struct http_client_s {
     http_server_t *server;
     uv_tcp_t handle;
-    uv_write_t write_req;
     // HTTP Parser...
     http_parser parser;
-
     http_request_t *request;
+    int close_connection;
 };
 
+    uv_write_t write_req;
+
+typedef struct http_write_cb_s http_write_cb_t;
+struct http_write_cb_s {
+    // Callback info to free buffers
+    http_write_cb cb;
+    void *data;
+};
 
 struct http_request_s {
     // HTTP Client - could service multiple requests...
@@ -96,25 +103,24 @@ struct http_request_s {
 #define RESPONSE_HEADER_SIZE 1024
 
 // HTTP Parser Funcs
-int _http_cb_on_message_begin(http_parser*);
-int _http_cb_on_url(http_parser*, const char *at, size_t length);
-int _http_cb_on_header_field(http_parser*, const char *at, size_t length);
-int _http_cb_on_header_value(http_parser*, const char *at, size_t length);
-int _http_cb_on_headers_complete(http_parser*);
-int _http_cb_on_body(http_parser*, const char *at, size_t length);
-int _http_cb_on_message_complete(http_parser*);
+int _http_parser__on_message_begin(http_parser*);
+int _http_parser__on_url(http_parser*, const char *at, size_t length);
+int _http_parser__on_header_field(http_parser*, const char *at, size_t length);
+int _http_parser__on_header_value(http_parser*, const char *at, size_t length);
+int _http_parser__on_headers_complete(http_parser*);
+int _http_parser__on_body(http_parser*, const char *at, size_t length);
+int _http_parser__on_message_complete(http_parser*);
 
 // HTTP Server Funcs
-static void _http_cb_on_close(uv_handle_t* handle);
-static void _http_cb_write_req_done(uv_write_t* req, int status);
-static void _http_cb_on_read(uv_stream_t* tcp, ssize_t nread, uv_buf_t buf);
-static void _http_cb_on_connect(uv_stream_t* server_handle, int status);
+static void _http_uv__on_close__cb(uv_handle_t* handle);
+static void _http_uv__on_read__cb(uv_stream_t* tcp, ssize_t nread, uv_buf_t buf);
+static void _http_uv__on_connect__cb(uv_stream_t* server_handle, int status);
 
 // Request Functions
-static http_request_t *_http_request_init(http_client_t *client);
-static void _http_request_finish(http_request_t *req);
-static http_client_t *_http_client_init(uv_stream_t* server_handle);
-static void _http_client_finish(http_client_t *req);
+static http_request_t *_http_request__init(http_client_t *client);
+static void _http_request__finish(http_request_t *req);
+static http_client_t *_http_client__init(uv_stream_t* server_handle);
+static void _http_client__finish(http_client_t *req);
 
 // Client Functions
 
@@ -122,22 +128,22 @@ static void _http_client_finish(http_client_t *req);
  * HTTP Callback Parser Functions
  ****************************************************************************/
 
-int _http_cb_on_message_begin(http_parser* parser) {
+int _http_parser__on_message_begin(http_parser* parser) {
     // Get Client from parser
     http_client_t* client = (http_client_t*) parser->data;
     // Create a request
-    client->request = _http_request_init(client);
+    client->request = _http_request__init(client);
     
-    LOGF("[ %5d ] _http_cb_on_message_begin", client->request->request_num);
+    LOGF("[ %5d ] _http_parser__on_message_begin", client->request->request_num);
 
     return 0;
 }
 
 
-int _http_cb_on_url(http_parser* parser, const char *at, size_t length) {
+int _http_parser__on_url(http_parser* parser, const char *at, size_t length) {
     http_request_t* req = ((http_client_t*)parser->data)->request;
     http_server_t* server = req->client->server;
-    LOGF("[ %5d ] _http_cb_on_url %s", req->request_num, at);
+    LOGF("[ %5d ] _http_parser__on_url %s", req->request_num, at);
     
 
     // Parse URL and determine the handler
@@ -171,9 +177,9 @@ int _http_cb_on_url(http_parser* parser, const char *at, size_t length) {
 }
 
 
-int _http_cb_on_header_field(http_parser* parser, const char *at, size_t length) {
+int _http_parser__on_header_field(http_parser* parser, const char *at, size_t length) {
     http_request_t* req = ((http_client_t*)parser->data)->request;
-    LOGF("[ %5d ] _http_cb_on_header_field %s", req->request_num, at);
+    LOGF("[ %5d ] _http_parser__on_header_field %s", req->request_num, at);
         
     switch (at[0]) {
         case 'R':
@@ -192,10 +198,10 @@ int _http_cb_on_header_field(http_parser* parser, const char *at, size_t length)
 }
 
 
-int _http_cb_on_header_value(http_parser* parser, const char *at, size_t length) {
+int _http_parser__on_header_value(http_parser* parser, const char *at, size_t length) {
     http_request_t* req = ((http_client_t*)parser->data)->request;
     char *dash = NULL;
-    LOGF("[ %5d ] _http_cb_on_header_value %s", req->request_num, at);
+    LOGF("[ %5d ] _http_parser__on_header_value %s", req->request_num, at);
 
     // Right now care about range requests
     switch (req->current_header) {
@@ -218,28 +224,28 @@ int _http_cb_on_header_value(http_parser* parser, const char *at, size_t length)
 }
 
 
-int _http_cb_on_headers_complete(http_parser* parser) {
+int _http_parser__on_headers_complete(http_parser* parser) {
     http_request_t* req = ((http_client_t*)parser->data)->request;
 
-    LOGF("[ %5d ] _http_cb_on_headers_complete", req->request_num);
+    LOGF("[ %5d ] _http_parser__on_headers_complete", req->request_num);
 
     return 0;
 }
 
 
-int _http_cb_on_body(http_parser* parser, const char *at, size_t length) {
+int _http_parser__on_body(http_parser* parser, const char *at, size_t length) {
     http_request_t* req = ((http_client_t*)parser->data)->request;
 
-    LOGF("[ %5d ] _http_cb_on_body %s", req->request_num, at);
+    LOGF("[ %5d ] _http_parser__on_body %s", req->request_num, at);
 
     return 0;
 }
 
 
-int _http_cb_on_message_complete(http_parser* parser) {
+int _http_parser__on_message_complete(http_parser* parser) {
     int rv = 0;
     http_request_t* req = ((http_client_t*)parser->data)->request;
-    LOGF("[ %5d ] _http_cb_on_message_complete", req->request_num);
+    LOGF("[ %5d ] _http_parser__on_message_complete", req->request_num);
 
     switch (parser->method) {
         case HTTP_GET:
@@ -263,6 +269,7 @@ int _http_cb_on_message_complete(http_parser* parser) {
             break;
     }
 
+    _http_request__finish(req);
     return 0;
 }
 
@@ -272,7 +279,7 @@ int _http_cb_on_message_complete(http_parser* parser) {
  ****************************************************************************/
  
 // TODO Pool this memory
-uv_buf_t _http_cb_on_alloc(uv_handle_t* req, size_t suggested_size) {
+uv_buf_t _http_uv__on_alloc__cb(uv_handle_t* req, size_t suggested_size) {
     uv_buf_t buf;
     buf.base = malloc(suggested_size);
     buf.len = suggested_size;
@@ -280,7 +287,7 @@ uv_buf_t _http_cb_on_alloc(uv_handle_t* req, size_t suggested_size) {
 }
 
 
-static void _http_cb_on_read(uv_stream_t* tcp, ssize_t nread, uv_buf_t buf) {
+static void _http_uv__on_read__cb(uv_stream_t* tcp, ssize_t nread, uv_buf_t buf) {
     size_t parsed;
     // Get the client
     http_client_t *client = (http_client_t*)tcp->data;
@@ -288,10 +295,10 @@ static void _http_cb_on_read(uv_stream_t* tcp, ssize_t nread, uv_buf_t buf) {
     if (nread >= 0) {
         // Read Data for Client connection
         parsed = http_parser_execute(&client->parser, &client->server->parser_settings, buf.base, nread);
-        if (parsed < nread) {
+        if (parsed < nread || http_should_keep_alive(&client->parser)) {
             // HTTP Parse Error
             LOG_ERROR("parse error");
-            uv_close((uv_handle_t*) &client->handle, _http_cb_on_close);
+            uv_close((uv_handle_t*) &client->handle, _http_uv__on_close__cb);
         }
     } else {
         // No Data Read... Handle Error case
@@ -301,31 +308,28 @@ static void _http_cb_on_read(uv_stream_t* tcp, ssize_t nread, uv_buf_t buf) {
         }
     }
 
+    // Free memory that was allocated by _http_uv__on_alloc__cb
     free(buf.base);
 }
 
 
-static void _http_cb_on_connect(uv_stream_t* server_handle, int status) {
+static void _http_uv__on_connect__cb(uv_stream_t* server_handle, int status) {
     //LOGF("New Connection");
     // Create/Initialize a HTTP Client
-    http_client_t *client = _http_client_init(server_handle);
+    http_client_t *client = _http_client__init(server_handle);
 
     // Start reading oof the Client
-    uv_read_start((uv_stream_t*)&client->handle, _http_cb_on_alloc, _http_cb_on_read);
+    uv_read_start((uv_stream_t*)&client->handle, _http_uv__on_alloc__cb, _http_uv__on_read__cb);
 }
 
 
-static void _http_cb_on_close(uv_handle_t* handle) {
+static void _http_uv__on_close__cb(uv_handle_t* handle) {
     //LOGF("[ %5d ] connection closed", client->request_num);
-    _http_client_finish((http_client_t*) handle->data);
+    _http_client__finish((http_client_t*) handle->data);
 }
 
 
-static void _http_cb_write_req_done(uv_write_t* req, int status) {
-    uv_close((uv_handle_t*)req->handle, _http_cb_on_close);
-}
-
-static http_request_t *_http_request_init(http_client_t *client) {
+static http_request_t *_http_request__init(http_client_t *client) {
     // Alloc req
     http_request_t *req = malloc(sizeof(http_request_t));
     // Setup Req
@@ -336,18 +340,18 @@ static http_request_t *_http_request_init(http_client_t *client) {
 }
 
 
-static void _http_request_finish(http_request_t *req) {
-
-
+static void _http_request__finish(http_request_t *req) {
+    // Check to see if http 1.1 and whether to keep connection open
+    http_client_t *client = req->client;
+    if (!http_should_keep_alive(&client->parser)) {
+        client->close_connection = 1;
+    }
+    client->request = NULL;
+    // Free up the Request obejct.
+    free(req);
 }
 
-static void _http_write_request_done_cb(uv_write_t* write_req, int status) {
-    http_request_t* req = ((http_client_t*)write_req->data)->request;
-    _http_request_finish(req);
-    uv_close((uv_handle_t*)&req->client->handle, _http_cb_on_close);
-}
-
-static http_client_t *_http_client_init(uv_stream_t* server_handle) {
+static http_client_t *_http_client__init(uv_stream_t* server_handle) {
     int r;
     // Get the server
     http_server_t *server = (http_server_t*)server_handle->data;
@@ -358,11 +362,11 @@ static http_client_t *_http_client_init(uv_stream_t* server_handle) {
     // Setup the Client
     client->server = server;
     client->request = NULL;
+    client->close_connection = 0;
     // Initializing http parser for REQUST
     http_parser_init(&client->parser, HTTP_REQUEST);
     // Setup the parser data so we have access to the request
     client->parser.data = client;
-    client->write_req.data = client;
 
     
     // Init UV stuff
@@ -376,9 +380,18 @@ static http_client_t *_http_client_init(uv_stream_t* server_handle) {
     return client;
 }
 
-static void _http_client_finish(http_client_t *req) {
-
-
+static void _http_client__finish(http_client_t *client) {
+    // TODO figure out uv_close and deletion of client / tcp connection
+    if (client->request != NULL) {
+        _http_request__finish(client->request);
+    }
+    // close the handle
+    // Assume this is called by the close function, so don't close the handle
+    // uv_close((uv_handle_t*) &client->handle, _http_uv__on_close__cb);
+    // No need to free up the http_parser memory because it's all contained
+    // in the client.
+    // Free up the memory of the client
+    free(client);
 }
 
 
@@ -396,12 +409,12 @@ http_server_t *http_server_create(char *listen_addr, short port) {
     // Initialize the parser
     http_parser_settings *parser = &server->parser_settings;
     // Setup the handlers
-    parser->on_message_begin    = _http_cb_on_message_begin;
-    parser->on_url              = _http_cb_on_url;
-    parser->on_header_field     = _http_cb_on_header_field;
-    parser->on_header_value     = _http_cb_on_header_value;
-    parser->on_headers_complete = _http_cb_on_headers_complete;
-    parser->on_message_complete = _http_cb_on_message_complete;
+    parser->on_message_begin    = _http_parser__on_message_begin;
+    parser->on_url              = _http_parser__on_url;
+    parser->on_header_field     = _http_parser__on_header_field;
+    parser->on_header_value     = _http_parser__on_header_value;
+    parser->on_headers_complete = _http_parser__on_headers_complete;
+    parser->on_message_complete = _http_parser__on_message_complete;
 
     // Create an event loop
     server->uv_loop = uv_default_loop();
@@ -457,7 +470,7 @@ int http_server_add_handler(http_server_t *server, const char *pattern, http_req
 int http_server_run(http_server_t *server) {
     int r;
 
-    r = uv_listen((uv_stream_t*)&server->tcp, 128, _http_cb_on_connect);
+    r = uv_listen((uv_stream_t*)&server->tcp, 128, _http_uv__on_connect__cb);
 
     LOG("listening on port");
 
@@ -476,48 +489,131 @@ int http_server_stop(http_server_t *server) {
 /*****************************************************************************
  * HTTP Server Response API
  ****************************************************************************/
- 
+#define http_connection_header_value(req) \
+    (char*)(http_should_keep_alive(&(req)->client->parser) ? "close" : "keep-alive")
+
+static void _http_request__write_callback(uv_write_t* write_req, int status) {
+    // get the callback object, which is in front of the write_req
+    http_write_cb_t *callback_obj = (http_write_cb_t*)(((uint8_t*)write_req) - sizeof(http_write_cb_t)); 
+    // Call our callback
+    if (callback_obj->cb != NULL) {
+        callback_obj->cb(callback_obj->data);
+    }
+    // Free up the memory
+    free(callback_obj);
+}
+
+static inline
+int _http_request__write(http_request_t *req, uv_buf_t *buffers, int count, http_write_cb cb, void *cb_data) {
+    // Malloc memory for our extra callback stuff and the uv_write_t
+    http_write_cb_t *callback_obj = malloc(sizeof(http_write_cb_t) + sizeof(uv_write_t));
+
+    // Setup our own special callback
+    callback_obj->cb = cb;
+    callback_obj->data = cb_data;
+
+    // Do the write
+    return uv_write(
+            (uv_write_t*)(((uint8_t*)callback_obj) + sizeof(http_write_cb_t)), // uv_write_t ptr
+            (uv_stream_t*)&req->client->handle, // handle to write to
+            buffers, // uv_buf_t
+            count, // # of buffers to write
+            _http_request__write_callback
+        ); 
+}
+
 #define HTTP_RESPONSE_HEADERS \
     "HTTP/1.1 %d %s\r\n" \
+    "Connection: %s\r\n" \
     "Content-Type: %s\r\n" \
     "Content-Length: %d\r\n" \
     "%s\r\n"
 
-static inline
-int _http_request_write(http_request_t *req, const char *data, int length, uv_write_cb callback) {
+int http_request_write_response_string(http_request_t *req, int status, const char *extra_headers, const char *content_type, const char *content, const uint32_t content_length, http_write_cb cb, void *cb_data) {
     uv_buf_t b;
-    b.base = (char*)data;
-    b.len = length;
-
-    uv_write(&req->client->write_req, (uv_stream_t*)&req->client->handle, &b, 1, callback); // last arg is a callback function here
-
-    return 0;
+    b.base = (char*)content;
+    b.len = content_length;
+    return http_request_write_response_buffers(req, status, extra_headers, content_type, &b, 1, cb, cb_data);
 }
 
-int http_request_write_response(http_request_t *req, int status, const char *extra_headers, const char *content_type, const char *content, const uint32_t content_length) {
-    uv_buf_t b[2];
-    char headers_buffer[RESPONSE_HEADER_SIZE];
-    int length = snprintf(headers_buffer, RESPONSE_HEADER_SIZE, HTTP_RESPONSE_HEADERS, status, "OK" /*http_status_strings[status]*/, content_type, content_length, extra_headers);
-    // Write headers
-    b[0].base = headers_buffer;
-    b[0].len = length;
-    // write cotent
-    b[1].base = (const char*)content;
-    b[1].len = content_length;
 
-    uv_write(&req->client->write_req, (uv_stream_t*)&req->client->handle, &b, 2, _http_write_request_done_cb); // last arg is a callback function here
+int http_request_write_response_buffers(http_request_t *req, int status, const char *extra_headers, const char *content_type, uv_buf_t *content_buffers, int content_buffers_count, http_write_cb cb, void *cb_data) {
+    uv_buf_t header;
+    char *headers_buffer = malloc(RESPONSE_HEADER_SIZE);
+    int content_length = 0;
+    int length;
+    int i;
+
+    for (i=0; i < content_buffers_count; i++) {
+        content_length += content_buffers[i].len;
+    }
+
+    length = snprintf(
+            headers_buffer,
+            RESPONSE_HEADER_SIZE,
+            HTTP_RESPONSE_HEADERS,
+            status,
+            http_status_code_text(status),
+            http_connection_header_value(req),
+            content_type,
+            content_length,
+            extra_headers);
+
+    // Write headers
+    header.base = headers_buffer;
+    header.len = length;
+
+    _http_request__write(req, &header, 1, free, headers_buffer); // Call free on the headers buffer
+    _http_request__write(req, content_buffers, content_buffers_count, cb, cb_data); // Call callback sent for the content
 
     return 0; // TODO what should I return here?
 }
 
 
-int http_request_chunked_response_start(http_request_t *req, int status, const char *extra_headers)
-{
+#define HTTP_RESPONSE_HEADERS_CHUNKED \
+    "HTTP/1.1 %d %s\r\n" \
+    "Connection: %s\r\n" \
+    "Content-Type: %s\r\n" \
+    "Transfer-Encoding: chunked\r\n" \
+    "%s\r\n"
+
+int http_request_chunked_response_start(http_request_t *req, int status, const char *extra_headers, const char *content_type) {
+    uv_buf_t header;
+    char *headers_buffer = malloc(RESPONSE_HEADER_SIZE);
+    int length = snprintf(
+            headers_buffer,
+            RESPONSE_HEADER_SIZE,
+            HTTP_RESPONSE_HEADERS_CHUNKED,
+            status,
+            http_status_code_text(status),
+            http_connection_header_value(req),
+            content_type,
+            extra_headers);
+
+    // Write headers
+    header.base = headers_buffer;
+    header.len = length;
+
+    _http_request__write(req, &header, 1, free, headers_buffer); // Call free on the headers buffer
     return 0;
 }
 
 
-int http_request_chunked_response_write(http_request_t *req, const char *data, int length) {
+int http_request_chunked_response_write(http_request_t *req, const char *data, int data_length, http_write_cb cb, void *cb_data) {
+    return 0;
+    uv_buf_t b;
+    char *headers_buffer = malloc(32);
+    int length = snprintf(headers_buffer, 32, "%X\r\n", length);
+
+    // Write headers
+    b.base = headers_buffer;
+    b.len = length;
+    _http_request__write(req, &b, 1, free, headers_buffer); // Call free on the headers buffer
+
+    // write content
+    b.base = (char*)data;
+    b.len = data_length;
+    _http_request__write(req, &b, 1, cb, cb_data); // Call free on the headers buffer
     return 0;
 }
 
@@ -525,4 +621,60 @@ int http_request_chunked_response_write(http_request_t *req, const char *data, i
 int http_request_chunked_response_end(http_request_t *req) {
     return 0;
 }
+
+
+
+/*****************************************************************************
+ * HTTP Utility Functions
+ ****************************************************************************/
+
+const char* http_status_code_text(uint32_t status) {
+    switch(status)
+    {
+        case 100: return "Continue";
+        case 101: return "Switching Protocols";
+        case 200: return "OK";
+        case 201: return "Created";
+        case 202: return "Accepted";
+        case 203: return "Non-Authoritative Information";
+        case 204: return "No Content";
+        case 205: return "Reset Content";
+        case 206: return "Partial Content";
+        case 300: return "Multiple Choices";
+        case 301: return "Moved Permanently";
+        case 302: return "Found";
+        case 303: return "See Other";
+        case 304: return "Not Modified";
+        case 305: return "Use Proxy";
+                  //case 306: return "(reserved)";
+        case 307: return "Temporary Redirect";
+        case 400: return "Bad Request";
+        case 401: return "Unauthorized";
+        case 402: return "Payment Required";
+        case 403: return "Forbidden";
+        case 404: return "Not Found";
+        case 405: return "Method Not Allowed";
+        case 406: return "Not Acceptable";
+        case 407: return "Proxy Authentication Required";
+        case 408: return "Request Timeout";
+        case 409: return "Conflict";
+        case 410: return "Gone";
+        case 411: return "Length Required";
+        case 412: return "Precondition Failed";
+        case 413: return "Request Entity Too Large";
+        case 414: return "Request-URI Too Long";
+        case 415: return "Unsupported Media Type";
+        case 416: return "Requested Range Not Satisfiable";
+        case 417: return "Expectation Failed";
+        case 500: return "Internal Server Error";
+        case 501: return "Not Implemented";
+        case 502: return "Bad Gateway";
+        case 503: return "Service Unavailable";
+        case 504: return "Gateway Timeout";
+        case 505: return "HTTP Version Not Supported";
+        default: break;
+    }
+    return "UNKNOWN STATUS CODE";
+}
+
 

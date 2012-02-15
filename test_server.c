@@ -28,7 +28,7 @@
 
 int test_request_handler(http_request_t *req) {
     
-    http_request_write_response(req, 200, "", "text/html", HELLO_WORLD, sizeof(HELLO_WORLD));
+    http_request_write_response_string(req, 200, "", "text/html", HELLO_WORLD, sizeof(HELLO_WORLD), NULL, NULL);
 
     return 0;
 }
