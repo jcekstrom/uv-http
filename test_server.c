@@ -22,14 +22,12 @@
 
 
 #include <http_server.h>
-
+#include <string.h>
 
 #define HELLO_WORLD "<html><body>HELLO WORLD!!!</body></html>"
 
 int test_request_handler(http_request_t *req) {
-    
-    http_request_write_response_string(req, 200, "", "text/html", HELLO_WORLD, sizeof(HELLO_WORLD), NULL, NULL);
-
+    http_request_write_response_string(req, 200, "", "text/html", HELLO_WORLD, strlen(HELLO_WORLD), NULL, NULL);
     return 0;
 }
 

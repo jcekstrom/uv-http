@@ -529,15 +529,20 @@ int _http_request__write(http_request_t *req, uv_buf_t *buffers, int count, http
     "Content-Length: %d\r\n" \
     "%s\r\n"
 
-int http_request_write_response_string(http_request_t *req, int status, const char *extra_headers, const char *content_type, const char *content, const uint32_t content_length, http_write_cb cb, void *cb_data) {
+int http_request_write_response_string(http_request_t *req, int status, const char *extra_headers, 
+        const char *content_type, const char *content, const uint32_t content_length, 
+        http_write_cb cb, void *cb_data) {
     uv_buf_t b;
     b.base = (char*)content;
     b.len = content_length;
-    return http_request_write_response_buffers(req, status, extra_headers, content_type, &b, 1, cb, cb_data);
+    return http_request_write_response_buffers(req, status, extra_headers, content_type, (http_buf_t*)&b, 1, cb, cb_data);
 }
 
 
-int http_request_write_response_buffers(http_request_t *req, int status, const char *extra_headers, const char *content_type, uv_buf_t *content_buffers, int content_buffers_count, http_write_cb cb, void *cb_data) {
+int http_request_write_response_buffers(http_request_t *req, int status, const char *extra_headers, 
+        const char *content_type, http_buf_t *content_buffers, int content_buffers_count, 
+        http_write_cb cb, void *cb_data) {
+    uv_buf_t* buffers = (uv_buf_t*) content_buffers;
     uv_buf_t header;
     char *headers_buffer = malloc(RESPONSE_HEADER_SIZE);
     int content_length = 0;
@@ -545,7 +550,7 @@ int http_request_write_response_buffers(http_request_t *req, int status, const c
     int i;
 
     for (i=0; i < content_buffers_count; i++) {
-        content_length += content_buffers[i].len;
+        content_length += buffers[i].len;
     }
 
     length = snprintf(
@@ -564,7 +569,7 @@ int http_request_write_response_buffers(http_request_t *req, int status, const c
     header.len = length;
 
     _http_request__write(req, &header, 1, free, headers_buffer); // Call free on the headers buffer
-    _http_request__write(req, content_buffers, content_buffers_count, cb, cb_data); // Call callback sent for the content
+    _http_request__write(req, buffers, content_buffers_count, cb, cb_data); // Call callback sent for the content
 
     return 0; // TODO what should I return here?
 }
@@ -676,5 +681,4 @@ const char* http_status_code_text(uint32_t status) {
     }
     return "UNKNOWN STATUS CODE";
 }
-
 
